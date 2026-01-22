@@ -96,7 +96,7 @@ async def handle_stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if bot_state["running"]:
         asyncio.run(morning_task())
     else:
-        logger.warning("⏸️ Tarea de mañana saltada - Bot pausado"ra reanudar.",
+        logger.warning("⏸️ Tarea de mañana saltada - Bot pausadora reanudar.",
                 parse_mode="HTML"
             )
             await send_telegram_notification("⏸️ <b>Bot PAUSADO</b> - Las tareas están suspendidas")
