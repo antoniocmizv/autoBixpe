@@ -2,8 +2,14 @@ import asyncio
 import os
 from datetime import datetime
 from playwright.async_api import async_playwright
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+import signal
+import sys
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,6 +26,115 @@ HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 
 # Instancia del bot de Telegram
 telegram_bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
+
+# Scheduler global
+scheduler = None
+
+# Estado del bot
+bot_state = {
+    "running": True,
+    "app": None
+}
+
+async def send_telegram_notification(message, is_error=False):
+    """Envía notificación por Telegram"""
+    if not telegram_bot or not TELEGRAM_CHAT_ID:
+        logger.warning("⚠️ Telegram no configurado")
+        return
+    
+    try:
+        emoji = "❌" if is_error else "✅"
+        full_message = f"{emoji} {message}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        await telegram_bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+
+async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja comando /start para reanudar el bot"""
+    global scheduler, bot_state
+    
+    try:
+        if not bot_state["running"]:
+            bot_state["running"] = True
+            if scheduler and not scheduler.running:
+                scheduler.start()
+            
+            logger.info("▶️ BOT REANUDADO POR COMANDO TELEGRAM")
+            await update.message.reply_text(
+                "▶️ <b>Bot reanudado</b>\n\n"
+                "Las tareas se ejecutarán a las horas programadas:\n"
+                "• 09:00 - Login + Fichaje\n"
+                "• 18:00 - Finalizar jornada",
+                parse_mode="HTML"
+            )
+            await send_telegram_notification("▶️ <b>Bot REANUDADO</b> - Tareas programadas activas")
+        else:
+            await update.message.reply_text(
+                "✅ Bot ya está <b>activo</b>\n\n"
+                "Próximas tareas programadas:\n"
+                "• 09:00 - Login + Fichaje\n"
+                "• 18:00 - Finalizar jornada",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"❌ Error en comando /start: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+async def handle_stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja comando /stop para pausar el bot"""
+    global scheduler, bot_state
+    
+    try:
+        if bot_state["running"]:
+            bot_state["running"] = False
+            if scheduler and scheduler.running:
+                scheduler.pause()
+            
+            logger.info("⏸️ BOT PAUSADO POR COMANDO TELEGRAM")
+            await update.message.reply_text(
+                "⏸️ <b>Bot pausado</b>\n\n"
+                "Las tareas programadas están pausadas.\n"
+    if bot_state["running"]:
+        asyncio.run(morning_task())
+    else:
+        logger.warning("⏸️ Tarea de mañana saltada - Bot pausado"ra reanudar.",
+                parse_mode="HTML"
+            )
+            await send_telegram_notification("⏸️ <b>Bot PAUSADO</b> - Las tareas están suspendidas")
+        else:
+            await update.message.reply_text(
+                "⏸️ Bot ya está <b>pausado</b>\n\n"
+                "Usa /start para reanudar.",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"❌ Error en comando /stop: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+async def handle_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja comando /status para ver estado del bot"""
+    try:
+        status = "▶️ ACTIVO" if bot_state["running"] else "⏸️ PAUSADO"
+        scheduler_status = "✅ Funcionando" if scheduler and scheduler.running else "❌ Detenido"
+        
+        await update.message.reply_text(
+            f"<b>Estado del Bot Bixpe</b>\n\n"
+            f"Estado general: {status}\n"
+            f"Scheduler: {scheduler_status}\n\n"
+            f"<b>Comandos disponibles:</b>\n"
+            f"/start - Reanudar bot\n"
+            f"/stop - Pausar bot\n"
+            f"/status - Ver estado",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error en comando /status: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+            text=full_message,
+            parse_mode="HTML"
+        )
+        logger.info(f"📱 Notificación enviada por Telegram")
+    except Exception as e:
+        logger.error(f"❌ Error al enviar notificación Telegram: {e}")
 
 async def take_screenshot_and_send(page, event_name):
     """Toma una captura de pantalla y la envía por Telegram"""
@@ -58,6 +173,10 @@ async def take_screenshot_and_send(page, event_name):
     except Exception as e:
         logger.error(f"❌ Error al tomar captura: {e}")
 
+def morning_task_sync():
+    """Wrapper síncrono para la tarea de la mañana"""
+    asyncio.run(morning_task())
+
 async def morning_task():
     """Tarea de las 9:00 - Login y click en botón"""
     async with async_playwright() as p:
@@ -65,6 +184,7 @@ async def morning_task():
             logger.info("=" * 50)
             logger.info("🌅 INICIANDO TAREA DE MAÑANA (9:00)")
             logger.info("=" * 50)
+            await send_telegram_notification("🌅 Iniciando tarea de MAÑANA (9:00) - Login y fichaje")
             
             # Lanzar navegador
             logger.info("🚀 Lanzando navegador Chrome...")
@@ -119,25 +239,59 @@ async def morning_task():
             
             await browser.close()
             logger.info("🏁 TAREA DE MAÑANA COMPLETADA\n")
+            await send_telegram_notification("✅ Tarea de MAÑANA completada exitosamente", is_error=False)
             
         except Exception as e:
             logger.error(f"❌ Error en tarea de mañana: {e}", exc_info=True)
+            await send_telegram_notification(f"<b>❌ ERROR en tarea MAÑANA:</b>\n<code>{str(e)}</code>", is_error=True)
 
-async def afternoon_task():
-    """Tarea de las 18:00 - Login y click en botón de stop"""
-    async with async_playwright() as p:
-        try:
-            logger.info("=" * 50)
-            logger.info("🌆 INICIANDO TAREA DE TARDE (18:00)")
-            logger.info("=" * 50)
-            
-            # Lanzar navegador
-            logger.info("🚀 Lanzando navegador Chrome...")
-            browser = await p.chromium.launch(headless=HEADLESS)
-            context = await browser.new_context()
-            page = await context.new_page()
-            
-            logger.info("🌐 Navegando a la página de login...")
+def afternoon_task_sync():
+    """Wrapper síncrono para la tarea de la tarde"""
+    asyncio.run(afternoon_task())
+,
+        misfire_grace_time=60
+    )
+    
+    # Programar tarea de tarde a las 18:00
+    scheduler.add_job(
+        afternoon_task_sync,
+        CronTrigger(hour=18, minute=0, second=0, timezone=tz),
+        id='afternoon_task',
+        name='Tarea Tarde (18:00)',
+        replace_existing=True,
+        misfire_grace_time=60
+    )
+    
+    scheduler.start()
+    logger.info("✅ Scheduler inicializado correctamente")
+    logger.info("📅 Tareas programadas:")
+    logger.info("   • 09:00 - Tarea de MAÑANA (Login + Fichaje)")
+    logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada)")
+
+async def init_telegram_handlers():
+    """Inicializa los handlers de comandos de Telegram"""
+    global bot_state
+    
+    if not TELEGRAM_TOKEN:
+        logger.warning("⚠️ TELEGRAM_TOKEN no configurado - Comandos deshabilitados")
+        return None
+    
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Agregar handlers de comandos
+    app.add_handler(CommandHandler("start", handle_start_command))
+    app.add_handler(CommandHandler("stop", handle_stop_command))
+    app.add_handler(CommandHandler("status", handle_status_command))
+    
+    bot_state["app"] = app
+    
+    logger.info("✅ Handlers de Telegram inicializados")
+    logger.info("📱 Comandos disponibles:")
+    logger.info("   • /start - Reanudar bot")
+    logger.info("   • /stop - Pausar bot")
+    logger.info("   • /status - Ver estado")
+    
+    return app
             await page.goto(LOGIN_URL, wait_until="networkidle")
             
             # Hacer login
@@ -184,57 +338,115 @@ async def afternoon_task():
             
             await browser.close()
             logger.info("🏁 TAREA DE TARDE COMPLETADA\n")
+            await send_telegram_notification("✅ Tarea de TARDE completada exitosamente", is_error=False)
             
         except Exception as e:
             logger.error(f"❌ Error en tarea de tarde: {e}", exc_info=True)
+            await send_telegram_notification(f"<b>❌ ERROR en tarea TARDE:</b>\n<code>{str(e)}</code>", is_error=True)
 
-def get_closest_task():
-    """Determina qué tarea ejecutar según la hora actual"""
-    now = datetime.now()
-    current_hour = now.hour
-    current_minute = now.minute
-    current_time_minutes = current_hour * 60 + current_minute
-    
-    # Tiempos en minutos desde medianoche
-    morning_time = 9 * 60  # 9:00
-    afternoon_time = 18 * 60  # 18:00
-    
-    # Calcular distancias
-    distance_to_morning = abs(current_time_minutes - morning_time)
-    distance_to_afternoon = abs(current_time_minutes - afternoon_time)
-    
-    logger.info(f"⏰ Hora actual: {now.strftime('%H:%M:%S')}")
-    logger.info(f"📏 Distancia a las 9:00: {distance_to_morning} minutos")
-    logger.info(f"📏 Distancia a las 18:00: {distance_to_afternoon} minutos")
-    
-    if distance_to_morning < distance_to_afternoon:
-        logger.info("✨ Más próximo a las 9:00 → Ejecutando TAREA DE MAÑANA")
-        return "morning"
-    else:
-        logger.info("✨ Más próximo a las 18:00 → Ejecutando TAREA DE TARDE")
-        return "afternoon"
+def shutdown_scheduler(signum, frame):
+    """Maneja el cierre graceful del scheduler"""
+    logger.info("\n🛑 Señal de cierre recibida...")
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        logger.info("✅ Scheduler detenido")
+    sys.exit(0)
 
-async def main():
-    """Función principal - ejecuta la tarea más cercana"""
-    logger.info("\n" + "🤖 " * 20)
-    logger.info("INICIALIZANDO BOT DE BIXPE")
+def init_scheduler():
+    """Inicializa el scheduler de tareas"""
+    global scheduler
+    
+    scheduler = BackgroundScheduler()
+    tz = pytz.timezone('Europe/Madrid')  # Ajusta tu zona horaria
+    
+    # Programar tarea de mañana a las 9:00
+    scheduler.add_job(
+        morning_task_sync,
+        CronTrigger(hour=9, minute=0, second=0, timezone=tz),
+        id='morning_task',
+        name='Tarea Mañana (9:00)', CON TELEGRAM")
     logger.info("🤖 " * 20 + "\n")
     
     logger.info(f"📌 Usuario: {USERNAME}")
     logger.info(f"🔗 URL: {LOGIN_URL}")
     logger.info(f"👁️ Headless: {HEADLESS}\n")
     
-    task_type = get_closest_task()
+    # Registrar manejadores de señales para cierre graceful
+    signal.signal(signal.SIGINT, shutdown_scheduler)
+    signal.signal(signal.SIGTERM, shutdown_scheduler)
+    
+    # Inicializar scheduler
+    init_scheduler()
+    
+    # Inicializar handlers de Telegram
+    app = await init_telegram_handlers()
     
     try:
-        if task_type == "morning":
-            await morning_task()
-        else:
-            await afternoon_task()
+        await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas:\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
+        logger.info("🌐 Bot en modo 24/7, esperando próxima tarea...\n")
+        
+        # Iniciar polling de Telegram si está configurado
+        if app:
+            logger.info("📱 Iniciando polling de Telegram...")
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling()
+            logger.info("✅ Polling de Telegram iniciado\n")
+        
+        # Mantener el bot corriendo indefinidamente
+        while True:
+            await asyncio.sleep(60)
+            
     except KeyboardInterrupt:
-        logger.info("\n🛑 Ejecución cancelada por el usuario")
+        logger.info("\n🛑 Bot detenido por el usuario")
+        if app:
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+        if scheduler and scheduler.running:
+            scheduler.shutdown()
     except Exception as e:
         logger.error(f"\n❌ Error fatal: {e}", exc_info=True)
+        await send_telegram_notification(f"<b>❌ ERROR FATAL EN BOT:</b>\n<code>{str(e)}</code>", is_error=True)
+        if app:
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except:
+                pass
+    logger.info("\n" + "🤖 " * 20)
+    logger.info("INICIALIZANDO BOT DE BIXPE - MODO 24/7")
+    logger.info("🤖 " * 20 + "\n")
+    
+    logger.info(f"📌 Usuario: {USERNAME}")
+    logger.info(f"🔗 URL: {LOGIN_URL}")
+    logger.info(f"👁️ Headless: {HEADLESS}\n")
+    
+    # Registrar manejadores de señales para cierre graceful
+    signal.signal(signal.SIGINT, shutdown_scheduler)
+    signal.signal(signal.SIGTERM, shutdown_scheduler)
+    
+    # Inicializar scheduler
+    init_scheduler()
+    
+    try:
+        await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas:\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada")
+        logger.info("🌐 Bot en modo 24/7, esperando próxima tarea...\n")
+        
+        # Mantener el bot corriendo indefinidamente
+        while True:
+            await asyncio.sleep(60)
+            
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Bot detenido por el usuario")
+        if scheduler and scheduler.running:
+            scheduler.shutdown()
+    except Exception as e:
+        logger.error(f"\n❌ Error fatal: {e}", exc_info=True)
+        await send_telegram_notification(f"<b>❌ ERROR FATAL EN BOT:</b>\n<code>{str(e)}</code>", is_error=True)
+        if scheduler and scheduler.running:
+            scheduler.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
