@@ -3,7 +3,9 @@ version: '3.8'
 
 services:
   bixpe-bot:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: bixpe-automation
     restart: unless-stopped
     environment:
