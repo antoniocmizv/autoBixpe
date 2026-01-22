@@ -1,0 +1,25 @@
+{
+  "name": "autoBixpe",
+  "version": "1.0.0",
+  "description": "Bot automatizado de Bixpe con Playwright y notificaciones por Telegram",
+  "author": "Tu Nombre",
+  "license": "MIT",
+  "homepage": "https://github.com/tu-usuario/autoBixpe",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tu-usuario/autoBixpe.git"
+  },
+  "keywords": [
+    "bixpe",
+    "automation",
+    "playwright",
+    "telegram",
+    "docker",
+    "python"
+  ],
+  "requirements": {
+    "python": ">=3.11",
+    "docker": ">=20.0",
+    "docker-compose": ">=1.29"
+  }
+}

@@ -1,0 +1,28 @@
+# Docker Compose para ejecutar fácilmente el bot de Bixpe
+version: '3.8'
+
+services:
+  bixpe-bot:
+    build: .
+    container_name: bixpe-automation
+    restart: unless-stopped
+    environment:
+      - BIXPE_USERNAME=${BIXPE_USERNAME}
+      - BIXPE_PASSWORD=${BIXPE_PASSWORD}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - HEADLESS=${HEADLESS:-true}
+    volumes:
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - bixpe-network
+
+networks:
+  bixpe-network:
+    driver: bridge
+
