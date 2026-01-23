@@ -6,10 +6,13 @@ from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 import signal
 import sys
+from concurrent.futures import ThreadPoolExecutor
+import aiohttp
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,11 +27,31 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BUTTON_SELECTOR = os.getenv("BUTTON_SELECTOR", "button[type='submit']")  # Ajusta según la web
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 
-# Instancia del bot de Telegram
-telegram_bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
+# Configuración del pool de conexiones
+TELEGRAM_POOL_SIZE = 5
+TELEGRAM_POOL_TIMEOUT = 10
 
-# Scheduler global
+# Instancia del bot de Telegram con configuración optimizada
+if TELEGRAM_TOKEN:
+    telegram_bot = Bot(
+        token=TELEGRAM_TOKEN,
+        request=aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(
+                limit=TELEGRAM_POOL_SIZE,
+                limit_per_host=TELEGRAM_POOL_SIZE,
+                ttl_dns_cache=300
+            ),
+            timeout=aiohttp.ClientTimeout(total=TELEGRAM_POOL_TIMEOUT)
+        )
+    )
+else:
+    telegram_bot = None
+
+# Scheduler global (AsyncIOScheduler en lugar de BackgroundScheduler)
 scheduler = None
+
+# Loop global
+event_loop = None
 
 # Estado del bot
 bot_state = {
@@ -37,22 +60,30 @@ bot_state = {
 }
 
 async def send_telegram_notification(message: str, is_error: bool = False) -> None:
-    """Envía notificación por Telegram"""
+    """Envía notificación por Telegram con reintentos"""
     if not telegram_bot or not TELEGRAM_CHAT_ID:
         logger.warning("⚠️ Telegram no configurado")
         return
     
-    try:
-        emoji = "❌" if is_error else "✅"
-        full_message = f"{emoji} {message}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        await telegram_bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=full_message,
-            parse_mode="HTML"
-        )
-        logger.info(f"📱 Notificación enviada por Telegram")
-    except Exception as e:
-        logger.error(f"❌ Error al enviar notificación Telegram: {e}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            emoji = "❌" if is_error else "✅"
+            full_message = f"{emoji} {message}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            await telegram_bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=full_message,
+                parse_mode="HTML"
+            )
+            logger.info(f"📱 Notificación enviada por Telegram")
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Backoff exponencial: 1s, 2s, 4s
+                logger.warning(f"⚠️ Intento {attempt + 1} fallido al enviar notificación, reintentando en {wait_time}s: {e}")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"❌ Error al enviar notificación Telegram (después de {max_retries} intentos): {e}")
 
 
 async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -173,9 +204,10 @@ async def take_screenshot_and_send(page, event_name: str) -> None:
         logger.error(f"❌ Error al tomar captura: {e}")
 
 def morning_task_sync() -> None:
-    """Wrapper síncrono para la tarea de la mañana"""
-    if bot_state["running"]:
-        asyncio.run(morning_task())
+    """Wrapper síncrono para la tarea de la mañana - Ejecuta en el loop global"""
+    if bot_state["running"] and event_loop:
+        # Usar ensure_future en lugar de asyncio.run()
+        asyncio.run_coroutine_threadsafe(morning_task(), event_loop)
     else:
         logger.warning("⏸️ Tarea de mañana saltada - Bot pausado")
 
@@ -248,9 +280,10 @@ async def morning_task() -> None:
             await send_telegram_notification(f"<b>❌ ERROR en tarea MAÑANA:</b>\n<code>{str(e)}</code>", is_error=True)
 
 def afternoon_task_sync() -> None:
-    """Wrapper síncrono para la tarea de la tarde"""
-    if bot_state["running"]:
-        asyncio.run(afternoon_task())
+    """Wrapper síncrono para la tarea de la tarde - Ejecuta en el loop global"""
+    if bot_state["running"] and event_loop:
+        # Usar ensure_future en lugar de asyncio.run()
+        asyncio.run_coroutine_threadsafe(afternoon_task(), event_loop)
     else:
         logger.warning("⏸️ Tarea de tarde saltada - Bot pausado")
 
@@ -337,7 +370,8 @@ def init_scheduler() -> None:
     """Inicializa el scheduler de tareas"""
     global scheduler
     
-    scheduler = BackgroundScheduler()
+    # Usar AsyncIOScheduler en lugar de BackgroundScheduler
+    scheduler = AsyncIOScheduler()
     tz = pytz.timezone('Europe/Madrid')
     
     # Programar tarea de mañana a las 9:00
@@ -393,6 +427,9 @@ async def init_telegram_handlers():
 
 async def main() -> None:
     """Función principal - mantiene el bot corriendo 24/7"""
+    global event_loop
+    event_loop = asyncio.get_event_loop()
+    
     logger.info("\n" + "🤖 " * 20)
     logger.info("INICIALIZANDO BOT DE BIXPE - MODO 24/7 CON TELEGRAM")
     logger.info("🤖 " * 20 + "\n")
@@ -405,8 +442,9 @@ async def main() -> None:
     signal.signal(signal.SIGINT, shutdown_scheduler)
     signal.signal(signal.SIGTERM, shutdown_scheduler)
     
-    # Inicializar scheduler
+    # Inicializar scheduler con el loop actual
     init_scheduler()
+    scheduler.configure(event_loop=event_loop)
     
     # Inicializar handlers de Telegram
     app = await init_telegram_handlers()
