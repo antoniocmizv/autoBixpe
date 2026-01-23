@@ -19,7 +19,7 @@ COPY requirements.txt .
 
 # Actualizar pip e instalar dependencias y tzdata
 RUN apt-get update && \
-    apt-get install -y tzdata && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata && \
     pip install --upgrade pip && \
     pip install --no-cache-dir playwright && \
     pip install --no-cache-dir -r requirements.txt && \
