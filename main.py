@@ -86,16 +86,16 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info("▶️ BOT REANUDADO POR COMANDO TELEGRAM")
             await update.message.reply_text(
                 "▶️ <b>Bot reanudado</b>\n\n"
-                "Las tareas se ejecutarán a las horas programadas:\n"
+                "Las tareas se ejecutarán de Lunes a Viernes:\n"
                 "• 09:00 - Login + Fichaje\n"
                 "• 18:00 - Finalizar jornada",
                 parse_mode="HTML"
             )
-            await send_telegram_notification("▶️ <b>Bot REANUDADO</b> - Tareas programadas activas")
+            await send_telegram_notification("▶️ <b>Bot REANUDADO</b> - Tareas programadas activas (L-V)")
         else:
             await update.message.reply_text(
                 "✅ Bot ya está <b>activo</b>\n\n"
-                "Próximas tareas programadas:\n"
+                "Próximas tareas (Lunes a Viernes):\n"
                 "• 09:00 - Login + Fichaje\n"
                 "• 18:00 - Finalizar jornada",
                 parse_mode="HTML"
@@ -364,9 +364,9 @@ def init_scheduler() -> None:
     # Programar tarea de mañana a las 9:00
     scheduler.add_job(
         morning_task_sync,
-        CronTrigger(hour=9, minute=0, second=0, timezone=tz),
+        CronTrigger(day_of_week='mon-fri', hour=9, minute=0, second=0, timezone=tz),
         id='morning_task',
-        name='Tarea Mañana (9:00)',
+        name='Tarea Mañana (9:00, L-V)',
         replace_existing=True,
         misfire_grace_time=60
     )
@@ -374,16 +374,16 @@ def init_scheduler() -> None:
     # Programar tarea de tarde a las 18:00
     scheduler.add_job(
         afternoon_task_sync,
-        CronTrigger(hour=18, minute=0, second=0, timezone=tz),
+        CronTrigger(day_of_week='mon-fri', hour=18, minute=0, second=0, timezone=tz),
         id='afternoon_task',
-        name='Tarea Tarde (18:00)',
+        name='Tarea Tarde (18:00, L-V)',
         replace_existing=True,
         misfire_grace_time=60
     )
     
     # scheduler.start()  <-- Se elimina de aquí, se inicia en main
     logger.info("✅ Scheduler configurado correctamente")
-    logger.info("📅 Tareas programadas:")
+    logger.info("📅 Tareas programadas (Lunes a Viernes):")
     logger.info("   • 09:00 - Tarea de MAÑANA (Login + Fichaje)")
     logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada)")
 
@@ -447,7 +447,7 @@ async def main() -> None:
         logger.info("✅ Scheduler iniciado")
     
     try:
-        await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas:\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
+        await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas (Lunes a Viernes):\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
         logger.info("🌐 Bot en modo 24/7, esperando próxima tarea...\n")
         
         # Iniciar polling de Telegram si está configurado
