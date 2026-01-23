@@ -14,8 +14,10 @@ services:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HEADLESS=${HEADLESS:-true}
+      - TZ=Europe/Madrid
     volumes:
       - ./logs:/app/logs
+      - /etc/localtime:/etc/localtime:ro
     logging:
       driver: "json-file"
       options:
