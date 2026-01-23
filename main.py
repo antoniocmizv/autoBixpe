@@ -31,21 +31,8 @@ HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 TELEGRAM_POOL_SIZE = 5
 TELEGRAM_POOL_TIMEOUT = 10
 
-# Instancia del bot de Telegram con configuración optimizada
-if TELEGRAM_TOKEN:
-    telegram_bot = Bot(
-        token=TELEGRAM_TOKEN,
-        request=aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(
-                limit=TELEGRAM_POOL_SIZE,
-                limit_per_host=TELEGRAM_POOL_SIZE,
-                ttl_dns_cache=300
-            ),
-            timeout=aiohttp.ClientTimeout(total=TELEGRAM_POOL_TIMEOUT)
-        )
-    )
-else:
-    telegram_bot = None
+# Instancia del bot de Telegram (se inicializa en main usando la Application)
+telegram_bot = None
 
 # Scheduler global (AsyncIOScheduler en lugar de BackgroundScheduler)
 scheduler = None
@@ -394,8 +381,8 @@ def init_scheduler() -> None:
         misfire_grace_time=60
     )
     
-    scheduler.start()
-    logger.info("✅ Scheduler inicializado correctamente")
+    # scheduler.start()  <-- Se elimina de aquí, se inicia en main
+    logger.info("✅ Scheduler configurado correctamente")
     logger.info("📅 Tareas programadas:")
     logger.info("   • 09:00 - Tarea de MAÑANA (Login + Fichaje)")
     logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada)")
@@ -442,12 +429,22 @@ async def main() -> None:
     signal.signal(signal.SIGINT, shutdown_scheduler)
     signal.signal(signal.SIGTERM, shutdown_scheduler)
     
-    # Inicializar scheduler con el loop actual
+    # Inicializar scheduler (configuración de jobs)
     init_scheduler()
-    scheduler.configure(event_loop=event_loop)
+    # Nota: No llamamos a scheduler.configure() aquí porque ya se creó en init_scheduler
     
     # Inicializar handlers de Telegram
     app = await init_telegram_handlers()
+
+    # Vincular el bot de la aplicación a la variable global
+    if app:
+        global telegram_bot
+        telegram_bot = app.bot
+
+    # Iniciar el scheduler explícitamente dentro del loop principal
+    if scheduler and not scheduler.running:
+        scheduler.start()
+        logger.info("✅ Scheduler iniciado")
     
     try:
         await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas:\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
