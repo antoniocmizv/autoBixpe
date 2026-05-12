@@ -51,7 +51,7 @@ async def send_telegram_notification(message: str, is_error: bool = False) -> No
     if not telegram_bot or not TELEGRAM_CHAT_ID:
         logger.warning("⚠️ Telegram no configurado")
         return
-    
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -73,16 +73,62 @@ async def send_telegram_notification(message: str, is_error: bool = False) -> No
                 logger.error(f"❌ Error al enviar notificación Telegram (después de {max_retries} intentos): {e}")
 
 
+async def validate_telegram_connection() -> bool:
+    """Valida que la conexión de Telegram siga siendo válida"""
+    if not telegram_bot:
+        logger.warning("⚠️ Bot de Telegram no inicializado")
+        return False
+
+    try:
+        me = await telegram_bot.get_me()
+        logger.info(f"✅ Conexión de Telegram validada: @{me.username}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Conexión de Telegram inválida: {e}")
+        return False
+
+
 async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja comando /start para reanudar el bot"""
-    global scheduler, bot_state
-    
+    global scheduler, bot_state, telegram_bot, event_loop
+
     try:
         if not bot_state["running"]:
+            logger.info("🔄 Intentando reanudar el bot...")
+
+            # Validar que el event loop sigue siendo válido
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                logger.error("❌ Event loop no válido, recreando...")
+                event_loop = asyncio.get_event_loop()
+
             bot_state["running"] = True
-            if scheduler and not scheduler.running:
-                scheduler.start()
-            
+
+            # Reiniciar scheduler si está detenido
+            if scheduler:
+                if scheduler.running:
+                    scheduler.resume()
+                    logger.info("✅ Scheduler reanudado")
+                else:
+                    scheduler.start()
+                    logger.info("✅ Scheduler iniciado")
+
+            # Validar conexión de Telegram
+            if telegram_bot:
+                try:
+                    me = await telegram_bot.get_me()
+                    logger.info(f"✅ Bot de Telegram validado: {me.username}")
+                except Exception as tg_error:
+                    logger.warning(f"⚠️ Token de Telegram inválido o expirado: {tg_error}")
+                    await update.message.reply_text(
+                        "⚠️ <b>Error:</b> Conexión de Telegram inválida\n"
+                        "Reinicia el contenedor para recargarlo.",
+                        parse_mode="HTML"
+                    )
+                    bot_state["running"] = False
+                    return
+
             logger.info("▶️ BOT REANUDADO POR COMANDO TELEGRAM")
             await update.message.reply_text(
                 "▶️ <b>Bot reanudado</b>\n\n"
@@ -102,18 +148,22 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
             )
     except Exception as e:
         logger.error(f"❌ Error en comando /start: {e}")
+        bot_state["running"] = False
         await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
 
 async def handle_stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja comando /stop para pausar el bot"""
-    global scheduler
-    
+    global scheduler, bot_state
+
     try:
         if bot_state["running"]:
             bot_state["running"] = False
+
+            # Pausar scheduler
             if scheduler and scheduler.running:
                 scheduler.pause()
-            
+                logger.info("⏸️ Scheduler pausado")
+
             logger.info("⏸️ BOT PAUSADO POR COMANDO TELEGRAM")
             await update.message.reply_text(
                 "⏸️ <b>Bot pausado</b>\n\n"
@@ -192,11 +242,13 @@ async def take_screenshot_and_send(page, event_name: str) -> None:
 
 def morning_task_sync() -> None:
     """Wrapper síncrono para la tarea de la mañana - Ejecuta en el loop global"""
-    if bot_state["running"] and event_loop:
-        # Usar ensure_future en lugar de asyncio.run()
-        asyncio.run_coroutine_threadsafe(morning_task(), event_loop)
+    if bot_state["running"] and event_loop and not event_loop.is_closed():
+        try:
+            asyncio.run_coroutine_threadsafe(morning_task(), event_loop)
+        except Exception as e:
+            logger.error(f"❌ Error al encolar tarea de mañana: {e}")
     else:
-        logger.warning("⏸️ Tarea de mañana saltada - Bot pausado")
+        logger.warning("⏸️ Tarea de mañana saltada - Bot pausado o loop inválido")
 
 async def morning_task() -> None:
     """Tarea de las 9:00 - Login y click en botón"""
@@ -268,11 +320,13 @@ async def morning_task() -> None:
 
 def afternoon_task_sync() -> None:
     """Wrapper síncrono para la tarea de la tarde - Ejecuta en el loop global"""
-    if bot_state["running"] and event_loop:
-        # Usar ensure_future en lugar de asyncio.run()
-        asyncio.run_coroutine_threadsafe(afternoon_task(), event_loop)
+    if bot_state["running"] and event_loop and not event_loop.is_closed():
+        try:
+            asyncio.run_coroutine_threadsafe(afternoon_task(), event_loop)
+        except Exception as e:
+            logger.error(f"❌ Error al encolar tarea de tarde: {e}")
     else:
-        logger.warning("⏸️ Tarea de tarde saltada - Bot pausado")
+        logger.warning("⏸️ Tarea de tarde saltada - Bot pausado o loop inválido")
 
 
 async def afternoon_task() -> None:
@@ -414,42 +468,40 @@ async def init_telegram_handlers():
 
 async def main() -> None:
     """Función principal - mantiene el bot corriendo 24/7"""
-    global event_loop
+    global event_loop, scheduler, telegram_bot, bot_state
     event_loop = asyncio.get_event_loop()
-    
+
     logger.info("\n" + "🤖 " * 20)
     logger.info("INICIALIZANDO BOT DE BIXPE - MODO 24/7 CON TELEGRAM")
     logger.info("🤖 " * 20 + "\n")
-    
+
     logger.info(f"📌 Usuario: {USERNAME}")
     logger.info(f"🔗 URL: {LOGIN_URL}")
     logger.info(f"👁️ Headless: {HEADLESS}\n")
-    
+
     # Registrar manejadores de señales para cierre graceful
     signal.signal(signal.SIGINT, shutdown_scheduler)
     signal.signal(signal.SIGTERM, shutdown_scheduler)
-    
+
     # Inicializar scheduler (configuración de jobs)
     init_scheduler()
-    # Nota: No llamamos a scheduler.configure() aquí porque ya se creó en init_scheduler
-    
+
     # Inicializar handlers de Telegram
     app = await init_telegram_handlers()
 
     # Vincular el bot de la aplicación a la variable global
     if app:
-        global telegram_bot
         telegram_bot = app.bot
 
     # Iniciar el scheduler explícitamente dentro del loop principal
     if scheduler and not scheduler.running:
         scheduler.start()
         logger.info("✅ Scheduler iniciado")
-    
+
     try:
         await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas (Lunes a Viernes):\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
         logger.info("🌐 Bot en modo 24/7, esperando próxima tarea...\n")
-        
+
         # Iniciar polling de Telegram si está configurado
         if app:
             logger.info("📱 Iniciando polling de Telegram...")
@@ -457,11 +509,24 @@ async def main() -> None:
             await app.start()
             await app.updater.start_polling()
             logger.info("✅ Polling de Telegram iniciado\n")
-        
+
+        # Validación periódica de conexión (cada 5 minutos)
+        last_validation = datetime.now()
+        validation_interval = 300  # 5 minutos
+
         # Mantener el bot corriendo indefinidamente
         while True:
             await asyncio.sleep(60)
-            
+
+            # Validar conexión de Telegram cada 5 minutos
+            now = datetime.now()
+            if (now - last_validation).total_seconds() > validation_interval:
+                if bot_state["running"] and app:
+                    is_valid = await validate_telegram_connection()
+                    if not is_valid:
+                        logger.warning("⚠️ Conexión de Telegram inválida, pero polling sigue activo")
+                last_validation = now
+
     except KeyboardInterrupt:
         logger.info("\n🛑 Bot detenido por el usuario")
         if app:
