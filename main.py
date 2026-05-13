@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, date
 from playwright.async_api import async_playwright
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -13,6 +13,8 @@ import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
+import json
+from pathlib import Path
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,6 +28,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BUTTON_SELECTOR = os.getenv("BUTTON_SELECTOR", "button[type='submit']")  # Ajusta según la web
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
+
+# Ruta de archivo de vacaciones
+VACACIONES_FILE = "vacaciones.json"
 
 # Configuración del pool de conexiones
 TELEGRAM_POOL_SIZE = 5
@@ -45,6 +50,47 @@ bot_state = {
     "running": True,
     "app": None
 }
+
+
+def load_vacaciones() -> list:
+    """Carga las vacaciones desde el archivo JSON"""
+    try:
+        if Path(VACACIONES_FILE).exists():
+            with open(VACACIONES_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('vacaciones', [])
+    except Exception as e:
+        logger.warning(f"⚠️ Error al cargar vacaciones: {e}")
+    return []
+
+
+def save_vacaciones(vacaciones: list) -> None:
+    """Guarda las vacaciones en el archivo JSON"""
+    try:
+        with open(VACACIONES_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'vacaciones': vacaciones}, f, indent=2, ensure_ascii=False)
+        logger.info("✅ Vacaciones guardadas")
+    except Exception as e:
+        logger.error(f"❌ Error al guardar vacaciones: {e}")
+
+
+def is_vacation_today() -> bool:
+    """Verifica si hoy es día de vacaciones"""
+    vacaciones = load_vacaciones()
+    today = date.today().isoformat()
+
+    for v in vacaciones:
+        try:
+            inicio = datetime.strptime(v['fecha_inicio'], '%Y-%m-%d').date()
+            fin = datetime.strptime(v['fecha_fin'], '%Y-%m-%d').date()
+
+            if inicio <= date.today() <= fin:
+                logger.info(f"🏖️ HOY ES VACACIONES: {v.get('razon', 'Sin descripción')}")
+                return True
+        except Exception as e:
+            logger.warning(f"⚠️ Error al procesar vacación: {e}")
+
+    return False
 
 async def send_telegram_notification(message: str, is_error: bool = False) -> None:
     """Envía notificación por Telegram con reintentos"""
@@ -187,7 +233,7 @@ async def handle_status_command(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         status = "▶️ ACTIVO" if bot_state["running"] else "⏸️ PAUSADO"
         scheduler_status = "✅ Funcionando" if scheduler and scheduler.running else "❌ Detenido"
-        
+
         await update.message.reply_text(
             f"<b>Estado del Bot Bixpe</b>\n\n"
             f"Estado general: {status}\n"
@@ -195,11 +241,142 @@ async def handle_status_command(update: Update, context: ContextTypes.DEFAULT_TY
             f"<b>Comandos disponibles:</b>\n"
             f"/start - Reanudar bot\n"
             f"/stop - Pausar bot\n"
-            f"/status - Ver estado",
+            f"/status - Ver estado\n"
+            f"/vacation - Agregar vacaciones\n"
+            f"/vacation_list - Ver vacaciones\n"
+            f"/vacation_delete - Eliminar vacación",
             parse_mode="HTML"
         )
     except Exception as e:
         logger.error(f"❌ Error en comando /status: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+
+async def handle_vacation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja comando /vacation para agregar vacaciones"""
+    try:
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Formato incorrecto\n\n"
+                "<b>Uso:</b> /vacation FECHA_INICIO FECHA_FIN [RAZÓN]\n\n"
+                "<b>Ejemplo:</b> /vacation 2026-05-15 2026-05-22 Vacaciones en playa\n\n"
+                "Fechas en formato: YYYY-MM-DD",
+                parse_mode="HTML"
+            )
+            return
+
+        fecha_inicio = context.args[0]
+        fecha_fin = context.args[1]
+        razon = " ".join(context.args[2:]) if len(context.args) > 2 else "Sin descripción"
+
+        # Validar formato de fechas
+        try:
+            inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d')
+            fin = datetime.strptime(fecha_fin, '%Y-%m-%d')
+
+            if inicio > fin:
+                await update.message.reply_text("❌ La fecha de inicio no puede ser mayor que la fecha de fin", parse_mode="HTML")
+                return
+
+            if inicio < datetime.now():
+                await update.message.reply_text("❌ La fecha de inicio no puede ser en el pasado", parse_mode="HTML")
+                return
+
+        except ValueError:
+            await update.message.reply_text("❌ Formato de fecha inválido. Usa: YYYY-MM-DD", parse_mode="HTML")
+            return
+
+        # Agregar vacación
+        vacaciones = load_vacaciones()
+        nueva_vacacion = {
+            "fecha_inicio": fecha_inicio,
+            "fecha_fin": fecha_fin,
+            "razon": razon,
+            "agregada": datetime.now().isoformat()
+        }
+        vacaciones.append(nueva_vacacion)
+        save_vacaciones(vacaciones)
+
+        dias = (fin - inicio).days + 1
+        await update.message.reply_text(
+            f"✅ <b>Vacación agregada</b>\n\n"
+            f"📅 Desde: {fecha_inicio}\n"
+            f"📅 Hasta: {fecha_fin}\n"
+            f"📝 Descripción: {razon}\n"
+            f"⏳ Duración: {dias} días\n\n"
+            f"⚠️ <b>El bot NO ejecutará tareas durante estos días.</b>",
+            parse_mode="HTML"
+        )
+        logger.info(f"🏖️ Vacación agregada: {fecha_inicio} a {fecha_fin}")
+        await send_telegram_notification(f"🏖️ Vacaciones agregadas: {fecha_inicio} a {fecha_fin} ({razon})")
+
+    except Exception as e:
+        logger.error(f"❌ Error en comando /vacation: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+
+async def handle_vacation_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra la lista de vacaciones"""
+    try:
+        vacaciones = load_vacaciones()
+
+        if not vacaciones:
+            await update.message.reply_text("✅ No hay vacaciones programadas", parse_mode="HTML")
+            return
+
+        mensaje = "<b>📅 Vacaciones Programadas</b>\n\n"
+        for idx, v in enumerate(vacaciones, 1):
+            try:
+                inicio = datetime.strptime(v['fecha_inicio'], '%Y-%m-%d').date()
+                fin = datetime.strptime(v['fecha_fin'], '%Y-%m-%d').date()
+                dias = (fin - inicio).days + 1
+                estado = "🟢 ACTIVA" if inicio <= date.today() <= fin else "⚪ FUTURA"
+
+                mensaje += f"<b>{idx}.</b> {estado}\n"
+                mensaje += f"   📅 {v['fecha_inicio']} → {v['fecha_fin']} ({dias} días)\n"
+                mensaje += f"   📝 {v['razon']}\n\n"
+            except Exception:
+                pass
+
+        mensaje += "<b>Usar:</b> /vacation_delete ID"
+        await update.message.reply_text(mensaje, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"❌ Error en comando /vacation_list: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+
+async def handle_vacation_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Elimina una vacación"""
+    try:
+        if not context.args or not context.args[0].isdigit():
+            await update.message.reply_text(
+                "❌ Uso: /vacation_delete ID\n\n"
+                "Usa /vacation_list para ver los IDs",
+                parse_mode="HTML"
+            )
+            return
+
+        idx = int(context.args[0]) - 1
+        vacaciones = load_vacaciones()
+
+        if idx < 0 or idx >= len(vacaciones):
+            await update.message.reply_text("❌ ID de vacación inválido", parse_mode="HTML")
+            return
+
+        vacacion_eliminada = vacaciones.pop(idx)
+        save_vacaciones(vacaciones)
+
+        await update.message.reply_text(
+            f"✅ <b>Vacación eliminada</b>\n\n"
+            f"📅 {vacacion_eliminada['fecha_inicio']} → {vacacion_eliminada['fecha_fin']}\n"
+            f"📝 {vacacion_eliminada['razon']}",
+            parse_mode="HTML"
+        )
+        logger.info(f"🗑️ Vacación eliminada: {vacacion_eliminada['fecha_inicio']}")
+
+    except Exception as e:
+        logger.error(f"❌ Error en comando /vacation_delete: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
 
 
@@ -242,6 +419,10 @@ async def take_screenshot_and_send(page, event_name: str) -> None:
 
 def morning_task_sync() -> None:
     """Wrapper síncrono para la tarea de la mañana - Ejecuta en el loop global"""
+    if is_vacation_today():
+        logger.info("🏖️ Tarea de mañana cancelada - HOY ES VACACIONES")
+        return
+
     if bot_state["running"] and event_loop and not event_loop.is_closed():
         try:
             asyncio.run_coroutine_threadsafe(morning_task(), event_loop)
@@ -320,6 +501,10 @@ async def morning_task() -> None:
 
 def afternoon_task_sync() -> None:
     """Wrapper síncrono para la tarea de la tarde - Ejecuta en el loop global"""
+    if is_vacation_today():
+        logger.info("🏖️ Tarea de tarde cancelada - HOY ES VACACIONES")
+        return
+
     if bot_state["running"] and event_loop and not event_loop.is_closed():
         try:
             asyncio.run_coroutine_threadsafe(afternoon_task(), event_loop)
@@ -447,22 +632,28 @@ async def init_telegram_handlers():
     if not TELEGRAM_TOKEN:
         logger.warning("⚠️ TELEGRAM_TOKEN no configurado - Comandos deshabilitados")
         return None
-    
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+
     # Agregar handlers de comandos
     app.add_handler(CommandHandler("start", handle_start_command))
     app.add_handler(CommandHandler("stop", handle_stop_command))
     app.add_handler(CommandHandler("status", handle_status_command))
-    
+    app.add_handler(CommandHandler("vacation", handle_vacation_command))
+    app.add_handler(CommandHandler("vacation_list", handle_vacation_list_command))
+    app.add_handler(CommandHandler("vacation_delete", handle_vacation_delete_command))
+
     bot_state["app"] = app
-    
+
     logger.info("✅ Handlers de Telegram inicializados")
     logger.info("📱 Comandos disponibles:")
     logger.info("   • /start - Reanudar bot")
     logger.info("   • /stop - Pausar bot")
     logger.info("   • /status - Ver estado")
-    
+    logger.info("   • /vacation - Agregar vacaciones")
+    logger.info("   • /vacation_list - Ver vacaciones")
+    logger.info("   • /vacation_delete - Eliminar vacación")
+
     return app
 
 

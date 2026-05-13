@@ -1,0 +1,10 @@
+{
+  "vacaciones": [
+    {
+      "fecha_inicio": "2026-05-15",
+      "fecha_fin": "2026-05-22",
+      "razon": "Vacaciones en playa",
+      "agregada": "2026-05-13T10:30:00"
+    }
+  ]
+}
