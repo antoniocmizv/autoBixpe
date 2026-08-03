@@ -29,12 +29,19 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BUTTON_SELECTOR = os.getenv("BUTTON_SELECTOR", "button[type='submit']")  # Ajusta según la web
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 
-# Ruta de archivo de vacaciones
+# Ruta de archivos de configuración
 VACACIONES_FILE = "vacaciones.json"
+JORNADA_FILE = "jornada.json"
 
 # Configuración del pool de conexiones
 TELEGRAM_POOL_SIZE = 5
 TELEGRAM_POOL_TIMEOUT = 10
+
+# Horas de trabajo
+WORKDAY_8_START = 9
+WORKDAY_8_END = 18
+WORKDAY_7_START = 9
+WORKDAY_7_END = 16
 
 # Instancia del bot de Telegram (se inicializa en main usando la Application)
 telegram_bot = None
@@ -72,6 +79,28 @@ def save_vacaciones(vacaciones: list) -> None:
         logger.info("✅ Vacaciones guardadas")
     except Exception as e:
         logger.error(f"❌ Error al guardar vacaciones: {e}")
+
+
+def load_jornada() -> dict:
+    """Carga la configuración de jornada desde el archivo JSON"""
+    try:
+        if Path(JORNADA_FILE).exists():
+            with open(JORNADA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('jornada', {'horas': 8, 'entrada': WORKDAY_8_START, 'salida': WORKDAY_8_END})
+    except Exception as e:
+        logger.warning(f"⚠️ Error al cargar jornada: {e}")
+    return {'horas': 8, 'entrada': WORKDAY_8_START, 'salida': WORKDAY_8_END}
+
+
+def save_jornada(jornada: dict) -> None:
+    """Guarda la configuración de jornada en el archivo JSON"""
+    try:
+        with open(JORNADA_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'jornada': jornada}, f, indent=2, ensure_ascii=False)
+        logger.info("✅ Jornada guardada")
+    except Exception as e:
+        logger.error(f"❌ Error al guardar jornada: {e}")
 
 
 def is_vacation_today() -> bool:
@@ -139,6 +168,9 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     global scheduler, bot_state, telegram_bot, event_loop
 
     try:
+        jornada = load_jornada()
+        salida = jornada['salida']
+
         if not bot_state["running"]:
             logger.info("🔄 Intentando reanudar el bot...")
 
@@ -177,19 +209,19 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
             logger.info("▶️ BOT REANUDADO POR COMANDO TELEGRAM")
             await update.message.reply_text(
-                "▶️ <b>Bot reanudado</b>\n\n"
-                "Las tareas se ejecutarán de Lunes a Viernes:\n"
-                "• 09:00 - Login + Fichaje\n"
-                "• 18:00 - Finalizar jornada",
+                f"▶️ <b>Bot reanudado</b>\n\n"
+                f"Las tareas se ejecutarán de Lunes a Viernes:\n"
+                f"• 09:00 - Login + Fichaje\n"
+                f"• {salida:02d}:00 - Finalizar jornada de {jornada['horas']}h",
                 parse_mode="HTML"
             )
-            await send_telegram_notification("▶️ <b>Bot REANUDADO</b> - Tareas programadas activas (L-V)")
+            await send_telegram_notification(f"▶️ <b>Bot REANUDADO</b> - Tareas: 09:00-{salida:02d}:00 ({jornada['horas']}h, L-V)")
         else:
             await update.message.reply_text(
-                "✅ Bot ya está <b>activo</b>\n\n"
-                "Próximas tareas (Lunes a Viernes):\n"
-                "• 09:00 - Login + Fichaje\n"
-                "• 18:00 - Finalizar jornada",
+                f"✅ Bot ya está <b>activo</b>\n\n"
+                f"Próximas tareas (Lunes a Viernes):\n"
+                f"• 09:00 - Login + Fichaje\n"
+                f"• {salida:02d}:00 - Finalizar jornada de {jornada['horas']}h",
                 parse_mode="HTML"
             )
     except Exception as e:
@@ -233,22 +265,85 @@ async def handle_status_command(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         status = "▶️ ACTIVO" if bot_state["running"] else "⏸️ PAUSADO"
         scheduler_status = "✅ Funcionando" if scheduler and scheduler.running else "❌ Detenido"
+        jornada = load_jornada()
 
         await update.message.reply_text(
-            f"<b>Estado del Bot Bixpe</b>\n\n"
-            f"Estado general: {status}\n"
-            f"Scheduler: {scheduler_status}\n\n"
-            f"<b>Comandos disponibles:</b>\n"
-            f"/start - Reanudar bot\n"
-            f"/stop - Pausar bot\n"
-            f"/status - Ver estado\n"
-            f"/vacation - Agregar vacaciones\n"
-            f"/vacation_list - Ver vacaciones\n"
-            f"/vacation_delete - Eliminar vacación",
+            f"<b>📊 Estado del Bot Bixpe</b>\n\n"
+            f"🔴 Estado general: {status}\n"
+            f"⚙️ Scheduler: {scheduler_status}\n"
+            f"⏰ Jornada: {jornada['horas']}h ({jornada['entrada']:02d}:00 - {jornada['salida']:02d}:00)\n\n"
+            f"<b>📋 Comandos disponibles:</b>\n"
+            f"<b>Control:</b>\n"
+            f"  /start - Reanudar bot\n"
+            f"  /stop - Pausar bot\n"
+            f"<b>Jornada:</b>\n"
+            f"  /workday - Ver jornada actual\n"
+            f"  /workday_set 7|8 - Cambiar a 7h u 8h\n"
+            f"<b>Vacaciones:</b>\n"
+            f"  /vacation INICIO FIN [RAZÓN] - Agregar\n"
+            f"  /vacation_list - Ver todas\n"
+            f"  /vacation_delete ID - Eliminar",
             parse_mode="HTML"
         )
     except Exception as e:
         logger.error(f"❌ Error en comando /status: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+
+async def handle_workday_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra la jornada actual"""
+    try:
+        jornada = load_jornada()
+        await update.message.reply_text(
+            f"<b>📅 Jornada Actual</b>\n\n"
+            f"Horas: <b>{jornada['horas']}h</b>\n"
+            f"Entrada: {jornada['entrada']:02d}:00\n"
+            f"Salida: {jornada['salida']:02d}:00\n\n"
+            f"Usa /workday_set 7 ó /workday_set 8 para cambiar",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error en comando /workday: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
+
+
+async def handle_workday_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cambia la jornada de trabajo"""
+    try:
+        if not context.args or not context.args[0].isdigit():
+            await update.message.reply_text(
+                "❌ Formato incorrecto\n\n"
+                "<b>Uso:</b> /workday_set HORAS\n\n"
+                "<b>Ejemplos:</b>\n"
+                "/workday_set 8 - Jornada de 8 horas (09:00-18:00)\n"
+                "/workday_set 7 - Jornada de 7 horas (09:00-16:00)",
+                parse_mode="HTML"
+            )
+            return
+
+        horas = int(context.args[0])
+
+        if horas == 8:
+            jornada = {'horas': 8, 'entrada': WORKDAY_8_START, 'salida': WORKDAY_8_END}
+        elif horas == 7:
+            jornada = {'horas': 7, 'entrada': WORKDAY_7_START, 'salida': WORKDAY_7_END}
+        else:
+            await update.message.reply_text("❌ Solo se permiten 7 u 8 horas", parse_mode="HTML")
+            return
+
+        save_jornada(jornada)
+        await update.message.reply_text(
+            f"✅ <b>Jornada actualizada</b>\n\n"
+            f"Horas: {jornada['horas']}h\n"
+            f"Entrada: {jornada['entrada']:02d}:00\n"
+            f"Salida: {jornada['salida']:02d}:00",
+            parse_mode="HTML"
+        )
+        logger.info(f"🔄 Jornada cambiada a {jornada['horas']}h")
+        await send_telegram_notification(f"🔄 Jornada actualizada: <b>{jornada['horas']}h</b> ({jornada['entrada']:02d}:00 - {jornada['salida']:02d}:00)")
+
+    except Exception as e:
+        logger.error(f"❌ Error en comando /workday_set: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
 
 
@@ -380,6 +475,32 @@ async def handle_vacation_delete_command(update: Update, context: ContextTypes.D
         await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode="HTML")
 
 
+async def login_to_bixpe(page) -> bool:
+    """Realiza login en Bixpe y retorna True si es exitoso"""
+    try:
+        logger.info("🌐 Navegando a la página de login...")
+        await page.goto(LOGIN_URL, wait_until="networkidle")
+
+        if not USERNAME or not PASSWORD:
+            logger.error("❌ USERNAME o PASSWORD no configurados")
+            return False
+
+        logger.info("🔐 Ingresando credenciales...")
+        await page.fill("input#Username", USERNAME)
+        await page.fill("input#Password", PASSWORD)
+
+        logger.info("🔘 Haciendo clic en botón de login...")
+        await page.click("button[type='submit']")
+        await page.wait_for_load_state("networkidle")
+        await asyncio.sleep(2)
+
+        logger.info("✅ Login completado")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error durante login: {e}")
+        return False
+
+
 async def take_screenshot_and_send(page, event_name: str) -> None:
     """Toma una captura de pantalla y la envía por Telegram"""
     try:
@@ -432,52 +553,36 @@ def morning_task_sync() -> None:
         logger.warning("⏸️ Tarea de mañana saltada - Bot pausado o loop inválido")
 
 async def morning_task() -> None:
-    """Tarea de las 9:00 - Login y click en botón"""
+    """Tarea de las 9:00 - Login y click en botón START"""
     async with async_playwright() as p:
+        browser = None
         try:
             logger.info("=" * 50)
             logger.info("🌅 INICIANDO TAREA DE MAÑANA (9:00)")
             logger.info("=" * 50)
             await send_telegram_notification("🌅 Iniciando tarea de MAÑANA (9:00) - Login y fichaje")
-            
-            # Lanzar navegador
+
             logger.info("🚀 Lanzando navegador Chrome...")
             browser = await p.chromium.launch(headless=HEADLESS)
             context = await browser.new_context()
             page = await context.new_page()
-            
-            logger.info("🌐 Navegando a la página de login...")
-            await page.goto(LOGIN_URL, wait_until="networkidle")
-            
-            # Hacer login
-            logger.info("🔐 Ingresando credenciales...")
-            await page.fill("input#Username", USERNAME)
-            await page.fill("input#Password", PASSWORD)
-            
-            # Esperar y hacer clic en el botón de login
-            logger.info("🔘 Haciendo clic en botón de login...")
-            await page.click("button[type='submit']")
-            await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(2)
-            
-            logger.info("✅ Login completado")
-            
-            # Enviar captura tras login
+
+            if not await login_to_bixpe(page):
+                await send_telegram_notification("<b>❌ ERROR en login MAÑANA</b>", is_error=True)
+                return
+
             await take_screenshot_and_send(page, "✅ Login Exitoso - TAREA MAÑANA (9:00)")
-            
-            # Esperar antes de hacer clic en el siguiente botón
+
             logger.info("⏳ Esperando 3 segundos antes de hacer clic en el botón de START...")
             await asyncio.sleep(3)
-            
-            # Buscar y hacer clic en el botón de inicio
+
             logger.info("🔍 Buscando botón de START...")
             start_button = await page.query_selector("button#btn-start-workday")
             if start_button:
                 await start_button.click()
                 logger.info("▶️ Botón START clickeado")
                 await asyncio.sleep(2)
-                
-                # Esperar a que aparezca el popup de confirmación
+
                 logger.info("⏳ Esperando popup de confirmación...")
                 try:
                     confirm_button = await page.wait_for_selector("button.swal2-confirm.swal2-styled", timeout=5000)
@@ -486,18 +591,20 @@ async def morning_task() -> None:
                     await asyncio.sleep(2)
                 except:
                     logger.warning("⚠️ Popup no encontrado, continuando...")
-                
+
                 await take_screenshot_and_send(page, "▶️ Botón START y confirmación completados (9:00)")
             else:
                 logger.warning("⚠️ Botón START no encontrado")
-            
-            await browser.close()
+
             logger.info("🏁 TAREA DE MAÑANA COMPLETADA\n")
             await send_telegram_notification("✅ Tarea de MAÑANA completada exitosamente", is_error=False)
-            
+
         except Exception as e:
             logger.error(f"❌ Error en tarea de mañana: {e}", exc_info=True)
             await send_telegram_notification(f"<b>❌ ERROR en tarea MAÑANA:</b>\n<code>{str(e)}</code>", is_error=True)
+        finally:
+            if browser:
+                await browser.close()
 
 def afternoon_task_sync() -> None:
     """Wrapper síncrono para la tarea de la tarde - Ejecuta en el loop global"""
@@ -515,52 +622,44 @@ def afternoon_task_sync() -> None:
 
 
 async def afternoon_task() -> None:
-    """Tarea de las 18:00 - Login y click en botón de stop"""
+    """Tarea de la tarde - Login y click en botón de STOP"""
+    jornada = load_jornada()
+    salida_hora = jornada['salida']
+    hora_actual = datetime.now().hour
+
+    if hora_actual != salida_hora:
+        logger.info(f"⏭️ Tarea de tarde saltada - Jornada de {jornada['horas']}h termina a las {salida_hora:02d}:00, no a las {hora_actual:02d}:00")
+        return
+
     async with async_playwright() as p:
+        browser = None
         try:
             logger.info("=" * 50)
-            logger.info("🌆 INICIANDO TAREA DE TARDE (18:00)")
+            logger.info(f"🌆 INICIANDO TAREA DE TARDE ({salida_hora:02d}:00) - JORNADA DE {jornada['horas']}H")
             logger.info("=" * 50)
-            await send_telegram_notification("🌆 Iniciando tarea de TARDE (18:00) - Finalizar jornada")
-            
-            # Lanzar navegador
+            await send_telegram_notification(f"🌆 Iniciando tarea de TARDE ({salida_hora:02d}:00) - Finalizar jornada de {jornada['horas']}h")
+
             logger.info("🚀 Lanzando navegador Chrome...")
             browser = await p.chromium.launch(headless=HEADLESS)
             context = await browser.new_context()
             page = await context.new_page()
-            
-            logger.info("🌐 Navegando a la página de login...")
-            await page.goto(LOGIN_URL, wait_until="networkidle")
-            
-            # Hacer login
-            logger.info("🔐 Ingresando credenciales...")
-            await page.fill("input#Username", USERNAME)
-            await page.fill("input#Password", PASSWORD)
-            
-            # Esperar y hacer clic en el botón de login
-            logger.info("🔘 Haciendo clic en botón de login...")
-            await page.click("button[type='submit']")
-            await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(2)
-            
-            logger.info("✅ Login completado")
-            
-            # Enviar captura tras login
-            await take_screenshot_and_send(page, "✅ Login Exitoso - TAREA TARDE (18:00)")
-            
-            # Esperar antes de hacer clic
+
+            if not await login_to_bixpe(page):
+                await send_telegram_notification("<b>❌ ERROR en login TARDE</b>", is_error=True)
+                return
+
+            await take_screenshot_and_send(page, f"✅ Login Exitoso - TAREA TARDE ({salida_hora:02d}:00)")
+
             logger.info("⏳ Esperando 3 segundos antes de hacer clic en el botón de STOP...")
             await asyncio.sleep(3)
-            
-            # Buscar y hacer clic en el botón de stop
+
             logger.info("🔍 Buscando botón de STOP...")
             stop_button = await page.query_selector("button#btn-stop-workday")
             if stop_button:
                 await stop_button.click()
                 logger.info("⏹️ Botón STOP clickeado")
                 await asyncio.sleep(2)
-                
-                # Esperar a que aparezca el popup de confirmación
+
                 logger.info("⏳ Esperando popup de confirmación...")
                 try:
                     confirm_button = await page.wait_for_selector("button.swal2-confirm.swal2-styled", timeout=5000)
@@ -569,18 +668,20 @@ async def afternoon_task() -> None:
                     await asyncio.sleep(2)
                 except Exception:
                     logger.warning("⚠️ Popup no encontrado, continuando...")
-                
-                await take_screenshot_and_send(page, "⏹️ Botón STOP y confirmación completados (18:00)")
+
+                await take_screenshot_and_send(page, f"⏹️ Botón STOP y confirmación completados ({salida_hora:02d}:00)")
             else:
                 logger.warning("⚠️ Botón STOP no encontrado")
-            
-            await browser.close()
+
             logger.info("🏁 TAREA DE TARDE COMPLETADA\n")
             await send_telegram_notification("✅ Tarea de TARDE completada exitosamente", is_error=False)
-            
+
         except Exception as e:
             logger.error(f"❌ Error en tarea de tarde: {e}", exc_info=True)
             await send_telegram_notification(f"<b>❌ ERROR en tarea TARDE:</b>\n<code>{str(e)}</code>", is_error=True)
+        finally:
+            if browser:
+                await browser.close()
 
 
 def shutdown_scheduler(signum, frame) -> None:
@@ -595,11 +696,11 @@ def shutdown_scheduler(signum, frame) -> None:
 def init_scheduler() -> None:
     """Inicializa el scheduler de tareas"""
     global scheduler
-    
+
     # Usar AsyncIOScheduler en lugar de BackgroundScheduler
     scheduler = AsyncIOScheduler()
     tz = pytz.timezone('Europe/Madrid')
-    
+
     # Programar tarea de mañana a las 9:00
     scheduler.add_job(
         morning_task_sync,
@@ -609,22 +710,33 @@ def init_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=60
     )
-    
-    # Programar tarea de tarde a las 18:00
+
+    # Programar tarea de tarde a las 16:00 (para jornada de 7h)
     scheduler.add_job(
         afternoon_task_sync,
-        CronTrigger(day_of_week='mon-fri', hour=18, minute=0, second=0, timezone=tz),
-        id='afternoon_task',
-        name='Tarea Tarde (18:00, L-V)',
+        CronTrigger(day_of_week='mon-fri', hour=16, minute=0, second=0, timezone=tz),
+        id='afternoon_task_7h',
+        name='Tarea Tarde (16:00, L-V - 7h)',
         replace_existing=True,
         misfire_grace_time=60
     )
-    
+
+    # Programar tarea de tarde a las 18:00 (para jornada de 8h)
+    scheduler.add_job(
+        afternoon_task_sync,
+        CronTrigger(day_of_week='mon-fri', hour=18, minute=0, second=0, timezone=tz),
+        id='afternoon_task_8h',
+        name='Tarea Tarde (18:00, L-V - 8h)',
+        replace_existing=True,
+        misfire_grace_time=60
+    )
+
     # scheduler.start()  <-- Se elimina de aquí, se inicia en main
     logger.info("✅ Scheduler configurado correctamente")
     logger.info("📅 Tareas programadas (Lunes a Viernes):")
     logger.info("   • 09:00 - Tarea de MAÑANA (Login + Fichaje)")
-    logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada)")
+    logger.info("   • 16:00 - Tarea de TARDE (Stop + Finalizar jornada de 7h)")
+    logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada de 8h)")
 
 
 async def init_telegram_handlers():
@@ -639,6 +751,8 @@ async def init_telegram_handlers():
     app.add_handler(CommandHandler("start", handle_start_command))
     app.add_handler(CommandHandler("stop", handle_stop_command))
     app.add_handler(CommandHandler("status", handle_status_command))
+    app.add_handler(CommandHandler("workday", handle_workday_command))
+    app.add_handler(CommandHandler("workday_set", handle_workday_set_command))
     app.add_handler(CommandHandler("vacation", handle_vacation_command))
     app.add_handler(CommandHandler("vacation_list", handle_vacation_list_command))
     app.add_handler(CommandHandler("vacation_delete", handle_vacation_delete_command))
@@ -650,6 +764,8 @@ async def init_telegram_handlers():
     logger.info("   • /start - Reanudar bot")
     logger.info("   • /stop - Pausar bot")
     logger.info("   • /status - Ver estado")
+    logger.info("   • /workday - Ver jornada actual")
+    logger.info("   • /workday_set - Cambiar jornada")
     logger.info("   • /vacation - Agregar vacaciones")
     logger.info("   • /vacation_list - Ver vacaciones")
     logger.info("   • /vacation_delete - Eliminar vacación")
@@ -665,6 +781,16 @@ async def main() -> None:
     logger.info("\n" + "🤖 " * 20)
     logger.info("INICIALIZANDO BOT DE BIXPE - MODO 24/7 CON TELEGRAM")
     logger.info("🤖 " * 20 + "\n")
+
+    if USERNAME == "tu_usuario" or PASSWORD == "tu_contraseña":
+        logger.error("❌ CREDENCIALES DE BIXPE NO CONFIGURADAS")
+        logger.error("❌ Establece BIXPE_USERNAME y BIXPE_PASSWORD en variables de entorno")
+        return
+
+    if not TELEGRAM_TOKEN:
+        logger.warning("⚠️ TELEGRAM_TOKEN no configurado - Comandos deshabilitados")
+    if not TELEGRAM_CHAT_ID:
+        logger.warning("⚠️ TELEGRAM_CHAT_ID no configurado - Notificaciones deshabilitadas")
 
     logger.info(f"📌 Usuario: {USERNAME}")
     logger.info(f"🔗 URL: {LOGIN_URL}")
@@ -690,7 +816,8 @@ async def main() -> None:
         logger.info("✅ Scheduler iniciado")
 
     try:
-        await send_telegram_notification("🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas (Lunes a Viernes):\n• 09:00 - Login + Fichaje\n• 18:00 - Finalizar jornada\n\n📱 Usa: /start /stop /status")
+        jornada = load_jornada()
+        await send_telegram_notification(f"🤖 <b>Bot iniciado - Modo 24/7 activado</b>\n\n📅 Próximas tareas (Lunes a Viernes):\n• 09:00 - Login + Fichaje\n• {jornada['salida']:02d}:00 - Finalizar jornada de {jornada['horas']}h\n\n📱 Usa: /start /stop /status /workday_set")
         logger.info("🌐 Bot en modo 24/7, esperando próxima tarea...\n")
 
         # Iniciar polling de Telegram si está configurado
