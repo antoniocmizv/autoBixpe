@@ -40,7 +40,7 @@ TELEGRAM_POOL_TIMEOUT = 10
 # Horas de trabajo
 WORKDAY_8_START = 9
 WORKDAY_8_END = 18
-WORKDAY_7_START = 10
+WORKDAY_7_START = 9
 WORKDAY_7_END = 17
 
 # Instancia del bot de Telegram (se inicializa en main usando la Application)
@@ -734,9 +734,9 @@ def init_scheduler() -> None:
     # scheduler.start()  <-- Se elimina de aquí, se inicia en main
     logger.info("✅ Scheduler configurado correctamente")
     logger.info("📅 Tareas programadas (Lunes a Viernes):")
-    logger.info("   • 09:00 (8h) / 10:00 (7h) - Tarea de MAÑANA (Login + Fichaje)")
-    logger.info("   • 17:00 - Tarea de TARDE (Stop + Finalizar jornada de 7h)")
-    logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada de 8h)")
+    logger.info("   • 09:00 - Login + Fichaje (ambas jornadas)")
+    logger.info("   • 17:00 - Stop (jornada de 7h)")
+    logger.info("   • 18:00 - Stop (jornada de 8h)")
 
 
 async def init_telegram_handlers():
