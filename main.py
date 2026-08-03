@@ -40,8 +40,8 @@ TELEGRAM_POOL_TIMEOUT = 10
 # Horas de trabajo
 WORKDAY_8_START = 9
 WORKDAY_8_END = 18
-WORKDAY_7_START = 9
-WORKDAY_7_END = 16
+WORKDAY_7_START = 10
+WORKDAY_7_END = 17
 
 # Instancia del bot de Telegram (se inicializa en main usando la Application)
 telegram_bot = None
@@ -711,12 +711,12 @@ def init_scheduler() -> None:
         misfire_grace_time=60
     )
 
-    # Programar tarea de tarde a las 16:00 (para jornada de 7h)
+    # Programar tarea de tarde a las 17:00 (para jornada de 7h)
     scheduler.add_job(
         afternoon_task_sync,
-        CronTrigger(day_of_week='mon-fri', hour=16, minute=0, second=0, timezone=tz),
+        CronTrigger(day_of_week='mon-fri', hour=17, minute=0, second=0, timezone=tz),
         id='afternoon_task_7h',
-        name='Tarea Tarde (16:00, L-V - 7h)',
+        name='Tarea Tarde (17:00, L-V - 7h)',
         replace_existing=True,
         misfire_grace_time=60
     )
@@ -734,8 +734,8 @@ def init_scheduler() -> None:
     # scheduler.start()  <-- Se elimina de aquí, se inicia en main
     logger.info("✅ Scheduler configurado correctamente")
     logger.info("📅 Tareas programadas (Lunes a Viernes):")
-    logger.info("   • 09:00 - Tarea de MAÑANA (Login + Fichaje)")
-    logger.info("   • 16:00 - Tarea de TARDE (Stop + Finalizar jornada de 7h)")
+    logger.info("   • 09:00 (8h) / 10:00 (7h) - Tarea de MAÑANA (Login + Fichaje)")
+    logger.info("   • 17:00 - Tarea de TARDE (Stop + Finalizar jornada de 7h)")
     logger.info("   • 18:00 - Tarea de TARDE (Stop + Finalizar jornada de 8h)")
 
 

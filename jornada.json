@@ -2,6 +2,7 @@
   "jornada": {
     "horas": 8,
     "entrada": 9,
-    "salida": 18
+    "salida": 18,
+    "nota": "Jornada de 7h: entrada 10:00, salida 17:00"
   }
 }
